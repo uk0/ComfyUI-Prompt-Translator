@@ -10,27 +10,32 @@ def translate(text, max_retries=3, backoff_factor=1.0):
     如果返回的 HTTP 状态码不是 2xx，将最多重试 max_retries 次，且每次重试前等待 backoff_factor * (2 ** (retry_idx-1)) 秒。
     """
     api_url = os.getenv("BIGMODEL_API_URL", "https://open.bigmodel.cn/api/paas/v4/chat/completions")
-    api_key = os.getenv("BIGMODEL_API_KEY", "xxxxxxxxx")
+    api_key = os.getenv("BIGMODEL_API_KEY", "xxxxxxxxxxxxxxxxxxxxxxx")
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}"
     }
 
     system_prompt = """
-    You are a specialized prompt engineer optimizing text for CLIP-based image generation in Flux Dev AI.
+    你是一名专业的提示工程师，负责生成适用于 Flux Dev AI 基于 CLIP 的图像生成参数。
 
-    When given a Chinese description from the user, generate two CLIP-compatible English prompts:
+    当收到用户的中文描述时，请按照以下要求输出**唯一**的 JSON 对象，不要添加任何多余说明：
     
-    1. (CLIP Positive Prompt) A concise, comma-separated list of high-value keywords and short phrases (max ~77 tokens) describing exactly what to include: objects, composition, style, lighting, color palette, mood, perspective, and any fine details. Structure it for optimal CLIP embedding — clear nouns and adjectives, no filler words.
+    1. **positive_prompt**：一个简洁的、用逗号分隔的英文关键词和短短语列表（最长约 77 个 token），精确描述要包含的内容（物体、构图、风格、光照、色彩、情绪、视角、细节），以优化 CLIP 嵌入——只用清晰的名词和形容词，不用填充词。  
+    2. **negative_prompt**：一个用逗号分隔的英文关键词列表，列出需要排除的不良元素或伪影（噪点、扭曲、不想要的物体等），同样针对 CLIP 嵌入优化——只用简单的名词和形容词。  
+    3. **num_images**：用户需要生成的图像数量，范围 1–4；默认 1，如果描述中未提及或超出范围则置为 1。  
+    4. **steps**：采样步数，范围 15–50；默认 15，如果描述中提及“步骤”且数值有效则使用该值，若小于 15 则置为 15，若大于 50 则置为 50。  
+    5. **cfg**：CLIP 引导强度，范围 1.0–15.0；默认 5.0，如果描述中提及“cfg”且数值有效则使用该值，若小于 1.0 则置为 5.0，若大于 15.0 则置为 15.0。
     
-    2. (CLIP Negative Prompt) A comma-separated list of undesirable elements, artifacts, or styles to exclude — noise, distortions, unwanted objects, etc. Keep it focused on CLIP’s understanding (simple nouns and adjectives).
-    
-    Output **only** a JSON object with exactly two fields, without any extra text:
+    示例输出格式（仅 JSON，不要解释）：
     
     ```json
     {
-      "positive_prompt": "<your CLIP-optimized positive prompt>",
-      "negative_prompt": "<your CLIP-optimized negative prompt>"
+      "positive_prompt": "sunset over mountain lake, warm golden light, misty atmosphere, high detail, panoramic view",
+      "negative_prompt": "noise, blur, distorted faces, text, watermarks",
+      "num_images": 2,
+      "steps": 30,
+      "cfg": 7.5
     }
     """
 
@@ -75,7 +80,7 @@ def translate(text, max_retries=3, backoff_factor=1.0):
 
     # 最终失败，打印错误并返回空结果
     print("翻译或解析 JSON 最终失败：", last_exception)
-    return {"positive_prompt": "", "negative_prompt": ""}
+    return {"positive_prompt": "", "negative_prompt": "", "num_images": ""}
 
 
 def contains_chinese(text):
@@ -92,8 +97,8 @@ class PromptTextTranslation:
             },
         }
 
-    RETURN_TYPES = ("STRING", "STRING",)
-    RETURN_NAMES = ("Positive Prompt", "Negative Prompt",)
+    RETURN_TYPES = ("STRING", "STRING","INT","INT","FLOAT")
+    RETURN_NAMES = ("Positive Prompt", "Negative Prompt","Image Count", "Steps", "CFG")
     FUNCTION = "translation"
     CATEGORY = "utils"
 
@@ -106,10 +111,13 @@ class PromptTextTranslation:
         if trans_switch == "enabled" and contains_chinese(text_trans):
             result = translate(text_trans)
         else:
-            result = {"positive_prompt": text_trans, "negative_prompt": ""}
+            result = {"positive_prompt": text_trans, "negative_prompt": "", "num_images": 1}
 
         positive = result.get("positive_prompt", "")
         negative = result.get("negative_prompt", "")
+        num_images = result.get("num_images", "")
+        steps = result.get("steps", 20)
+        cfg = result.get("cfg", 1)
 
         # 清理逗号和空格
         positive = re.sub(r'\s+,', ',', positive.replace('，', ',').replace('。', ',')).strip()
@@ -117,16 +125,33 @@ class PromptTextTranslation:
 
         print("Positive Prompt:", positive)
         print("Negative Prompt:", negative)
+        print("Num Images:", num_images)
+        print("Images steps:", steps)
+        print("Images cfg:", cfg)
 
-        return (positive, negative)
+        return (positive, negative,num_images,steps,cfg)
 
 
 # 测试示例
 if __name__ == "__main__":
-    example_prompt = "一个漂亮的女人，站在海边，日出时分，阳光照耀着她的身体。"
+    example_prompt = "一个漂亮的女人，站在海边，日出时分，阳光照耀着她的身体，生成四张图片,步骤20，cfg值1.5"
 
     translator = PromptTextTranslation()
-    pos, neg = translator.translation(example_prompt, "enabled")
+    pos, neg ,num_img,steps,cfg= translator.translation(example_prompt, "enabled")
+    print("==============================\n")
+    print("最终输出的 Positive Prompt:", pos)
+    print("最终输出的 Negative Prompt:", neg)
+    print("最终输出的 num_img:", num_img)
+    print("最终输出的 steps:", steps)
+    print("最终输出的 cfg:", cfg)
 
-    print("\n最终输出的Positive Prompt:", pos)
-    print("最终输出的Negative Prompt:", neg)
+    example_prompt = "一个漂亮的女人，站在海边，日出时分，阳光照耀着她的身体，生成四张图片,steps 0，cfg值 0"
+
+    translator = PromptTextTranslation()
+    pos, neg, num_img, steps, cfg = translator.translation(example_prompt, "enabled")
+    print("==============================\n")
+    print("最终输出的 Positive Prompt:", pos)
+    print("最终输出的 Negative Prompt:", neg)
+    print("最终输出的 num_img:", num_img)
+    print("最终输出的 steps:", steps)
+    print("最终输出的 cfg:", cfg)
